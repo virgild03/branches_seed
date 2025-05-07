@@ -1,0 +1,11 @@
+# Utilise l'image Python officielle
+FROM python:3.11-slim
+
+# Définit le répertoire de travail dans le conteneur
+WORKDIR /app
+
+# Copie tous les fichiers de ton projet dans le conteneur
+COPY . .
+
+# Commande à exécuter au lancement du conteneur
+CMD ["python", "main.py"]

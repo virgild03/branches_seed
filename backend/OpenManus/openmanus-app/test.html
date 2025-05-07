@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Test - Gestion des questions</title>
+  
+  <!--renvoie vers le CSS-->
+  <link rel="stylesheet" href="style_excentrique.css">
+
+  <!--inclusion scripts firebase (pas encore configure)-->
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+  <script>
+    //a configurer par les valeurs de mon projet
+    var firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT.firebaseapp.com",
+      databaseURL: "https://YOUR_PROJECT.firebaseio.com",
+      projectId: "YOUR_PROJECT",
+      storageBucket: "YOUR_PROJECT.appspot.com",
+      messagingSenderId: "YOUR_SENDER_ID",
+      appId: "YOUR_APP_ID"
+    };
+    //init firebase
+    firebase.initializeApp(firebaseConfig);
+  </script>
+</head>
+<body>
+  <h1>SEED - test</h1>
+  
+  <!--timer place en haut a droite-->
+  <div id="timer-container">
+    <input type="number" id="timer-input" placeholder="Temps imparti (min)" style="width:300px;"> 
+    <button id="timer-btn" onclick="gererTimer()">Valider Timer</button>
+  </div>
+
+  <div id="main-container">
+    <button id="ajouter-btn" onclick="ajouterQuestion()">Ajouter une question</button>
+    <div id="questions-container"></div>
+  </div>
+
+  <div id="question-counter">
+    Nombre de questions : <span id="compteur">0</span>
+  </div>
+  
+  <!--bouton finir qui renvoie à la page de creation de test (il faudra ajouter l'envoie des donees a firebase)-->
+  <div id="finish-container">
+    <button id="finish-btn" onclick="finishTest()" style="padding: 12px 24px; font-size: 1.1em; background-color: #2f7f2f; color: white; border: none; border-radius: 6px; cursor: pointer;">Finir</button>
+  </div>
+
+  <script>
+    let questionCount = 0;
+    const propositionLetters = ["A", "B", "C", "D", "E"];
+
+    function updateQuestionCounter() {
+      document.getElementById('compteur').textContent = questionCount;
+    }
+
+    function gererTimer() {
+      const timerInput = document.getElementById('timer-input');
+      const timerBtn = document.getElementById('timer-btn');
+
+      if (timerBtn.innerText === "Valider Timer") {
+        if (timerInput.value.trim() === "") {
+          alert("Veuillez entrer un temps imparti (en minutes).");
+          return;
+        }
+        timerInput.disabled = true;
+        timerBtn.innerText = "Modifier Timer";
+        alert("Timer fixé à " + timerInput.value + " minutes !");
+      } else {
+        timerInput.disabled = false;
+        timerBtn.innerText = "Valider Timer";
+        alert("Modification du timer activée.");
+      }
+    }
+    //ajouter une question par le bouton
+    function ajouterQuestion() {
+      //incrementer une question a l'encadre en bas a droite.
+      questionCount++;
+      updateQuestionCounter();
+
+      //garantit que chaque question ajoutee dynamiquement a des elements HTML bien separes des autres.
+      const idStr = questionCount.toString();
+      const container = document.getElementById('questions-container');
+
+      const card = document.createElement('div');
+      card.className = 'question-card';
+      card.id = 'question-' + idStr;
+      //pour positionner le bouton IA en haut a droite des encadres de questions
+      card.style.position = "relative";
+
+      //bouton "utiliser l'IA" en haut a droite
+      const btnIA = document.createElement('button');
+      btnIA.innerText = "utiliser l'IA";
+      btnIA.classList.add("ia-button");
+      btnIA.style.position = "absolute";
+      btnIA.style.top = "5px";
+      btnIA.style.right = "5px";
+
+      //a modifier quand j'implemente l'ia
+      // ouverture du modal IA uniquement
+      btnIA.addEventListener('click', function(e) {
+        e.preventDefault();
+        // on mémorise la carte courante
+        window.currentIaCard = this.closest('.question-card').id;
+        // on affiche la fenêtre
+        document.getElementById('ia-modal').style.display = 'flex';
+      });
+
+
+      card.appendChild(btnIA);
+
+      const labelType = document.createElement('label');
+      labelType.innerText = "Type de question :";
+      card.appendChild(labelType);
+
+      const selectType = document.createElement('select');
+      selectType.id = 'type-' + idStr;
+      //menu deroulant pour choisir le type de question entre les trois possibilites
+      selectType.innerHTML = `
+        <option value="QCM">QCM</option>
+        <option value="ouverte">Question ouverte</option>
+        <option value="coding">Coding Test</option>
+      `;
+      selectType.addEventListener('change', function() {
+        //changer les champs en fonction du type de question(qcm=enonce+propositions+outputExpected, questionOuverte=enonce, codingTest=enconce+outputExpected)
+        ajusterChampReponse(idStr);
+      });
+      card.appendChild(selectType);
+
+      const labelEnonce = document.createElement('label');
+      labelEnonce.innerText = "Énoncé de la question :";
+      card.appendChild(labelEnonce);
+
+      const inputEnonce = document.createElement('textarea');
+      inputEnonce.id = 'enonce-' + idStr;
+      inputEnonce.rows = 3;
+      card.appendChild(inputEnonce);
+
+      const propositionsDiv = document.createElement('div');
+      propositionsDiv.id = 'propositions-container-' + idStr;
+      propositionsDiv.dataset.count = "0";
+
+      const btnAjouterProp = document.createElement('button');
+      btnAjouterProp.innerText = "Ajouter proposition";
+      btnAjouterProp.type = "button";
+      btnAjouterProp.addEventListener('click', function() {
+        ajouterProposition(idStr);
+      });
+      propositionsDiv.appendChild(btnAjouterProp);
+
+      const listePropositions = document.createElement('div');
+      listePropositions.id = 'liste-propositions-' + idStr;
+      propositionsDiv.appendChild(listePropositions);
+
+      card.appendChild(propositionsDiv);
+
+      const divReponse = document.createElement('div');
+      divReponse.id = 'reponse-container-' + idStr;
+      //-----------------------------------------------------------------------------------------------------------ajout du champs input 
+      const labelInputTest = document.createElement('label');
+      labelInputTest.innerText = "Input :";
+      divReponse.appendChild(labelInputTest);
+
+      const inputTest = document.createElement('textarea');
+      inputTest.style.display = "none";   //cache par defaut le champ input texte
+
+      inputTest.id = 'input-test-' + idStr;
+      inputTest.rows = 2;
+      divReponse.appendChild(inputTest);
+
+      //-----------------------------------------------------------------------------------------------------------ajout du champs input
+      const labelReponse = document.createElement('label');
+      labelReponse.innerText = "Output expected :";
+      divReponse.appendChild(labelReponse);
+
+      const inputReponse = document.createElement('textarea');
+      inputReponse.id = 'reponse-' + idStr;
+      inputReponse.rows = 2;
+      divReponse.appendChild(inputReponse);
+      card.appendChild(divReponse);
+
+      ajusterChampReponse(idStr);
+
+      const actionsDiv = document.createElement('div');
+      actionsDiv.className = 'question-actions';
+
+      const btnValider = document.createElement('button');
+      btnValider.innerText = "Valider";
+      btnValider.addEventListener('click', function() {
+        if (btnValider.innerText === "Valider") {
+          validerQuestion(card.id);
+        } else {
+          modifierQuestion(card.id);
+        }
+      });
+      actionsDiv.appendChild(btnValider);
+
+      const btnSupprimer = document.createElement('button');
+      btnSupprimer.innerText = "Supprimer";
+      btnSupprimer.classList.add("delete-button");
+      btnSupprimer.addEventListener('click', function() {
+        supprimerQuestion(card.id);
+      });
+      actionsDiv.appendChild(btnSupprimer);
+
+      card.appendChild(actionsDiv);
+
+      //zone tags (champ de texte + affichage des badges)
+      const tagsContainer = document.createElement('div');
+      tagsContainer.className = "tags-container";
+      tagsContainer.style.marginTop = "10px";
+
+      //champ de saisie
+      const tagInput = document.createElement('input');
+      tagInput.type = "text";
+      tagInput.id = "tag-input-" + idStr;
+      tagInput.placeholder = "Ajouter un tag";
+      //petite largeur pour le textefield des tags
+      tagInput.style.width = "100px";
+      tagsContainer.appendChild(tagInput);
+
+      // Bouton carre avec fleche vers la droite
+      const validateTagBtn = document.createElement('button');
+      validateTagBtn.type = "button";
+      validateTagBtn.textContent = "→";
+      validateTagBtn.style.width = "30px";
+      validateTagBtn.style.height = "30px";
+      validateTagBtn.style.marginLeft = "5px";
+      // Au clic, on valide un tag comme avec la touche Entrée
+      validateTagBtn.addEventListener('click', function() {
+        ajouterTag(idStr);
+      });
+      tagsContainer.appendChild(validateTagBtn);
+
+      // Liste des tags
+      const tagList = document.createElement('div');
+      tagList.id = "tag-list-" + idStr;
+      tagList.style.display = "inline-block";
+      tagList.style.marginLeft = "10px";
+      tagsContainer.appendChild(tagList);
+
+      // Validation d'un tag avec la touche "Entrée"
+      tagInput.addEventListener('keydown', function(event) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          ajouterTag(idStr);
+        }
+      });
+
+      card.appendChild(tagsContainer);
+      container.appendChild(card);
+    }
+
+    // Fonction pour ajouter un tag (depuis bouton ou touche "Entrée")
+    function ajouterTag(questionId) {
+      const tagInput = document.getElementById('tag-input-' + questionId);
+      const tagList = document.getElementById('tag-list-' + questionId);
+      const tag = tagInput.value.trim();
+      if (tag === "") return;
+      if (tagList.children.length >= 7) {
+        alert("Nombre maximum de tags atteint.");
+        return;
+      }
+
+      const tagBadge = document.createElement('span');
+      tagBadge.className = "tag-badge";
+      tagBadge.style.display = "inline-block";
+      tagBadge.style.padding = "2px 5px";
+      tagBadge.style.marginRight = "5px";
+      // Couleurs adaptées pour un thème noir
+      tagBadge.style.backgroundColor = "#666"; 
+      tagBadge.style.color = "#fff";
+      tagBadge.style.borderRadius = "4px";
+      tagBadge.innerText = tag + " ";
+
+      const removeBtn = document.createElement('span');
+      removeBtn.innerText = "✖";
+      removeBtn.style.cursor = "pointer";
+      removeBtn.addEventListener('click', function() {
+        tagList.removeChild(tagBadge);
+      });
+      tagBadge.appendChild(removeBtn);
+
+      tagList.appendChild(tagBadge);
+      tagInput.value = "";
+    }
+
+    /*  ─── test.html  ─── */
+    /* remplacez l’ancienne définition de la fonction par :            */
+    function ajouterProposition(questionId, valeur = "") {
+      const listePropositions  = document.getElementById('liste-propositions-' + questionId);
+      const propositionsDiv    = document.getElementById('propositions-container-' + questionId);
+      let  count               = parseInt(propositionsDiv.dataset.count, 10);
+
+      if (count >= 5) {
+        alert("Vous ne pouvez pas ajouter plus de 5 propositions.");
+        return;
+      }
+      const lettre = propositionLetters[count];
+      count++;
+      propositionsDiv.dataset.count = String(count);
+
+      const propositionDiv = document.createElement('div');
+      propositionDiv.className = 'proposition-item';
+
+      const labelProp = document.createElement('label');
+      labelProp.innerText = `${lettre}: `;
+      propositionDiv.appendChild(labelProp);
+
+      const inputProp = document.createElement('input');
+      inputProp.type  = "text";
+      inputProp.id    = `proposition-${questionId}-${count}`;
+      inputProp.value = valeur;                 // ← pré-remplissage éventuel
+      propositionDiv.appendChild(inputProp);
+
+      const btnSuppr  = document.createElement('button');
+      btnSuppr.innerText = "Supprimer";
+      btnSuppr.type      = "button";
+      btnSuppr.onclick   = function () {
+        propositionDiv.remove();
+        propositionsDiv.dataset.count = String(parseInt(propositionsDiv.dataset.count, 10) - 1);
+      };
+      propositionDiv.appendChild(btnSuppr);
+
+      listePropositions.appendChild(propositionDiv);
+    }
+
+
+    function ajusterChampReponse(questionId) {
+      const selectType             = document.getElementById('type-' + questionId);
+      const reponseContainer       = document.getElementById('reponse-container-' + questionId);
+      const propositionsContainer  = document.getElementById('propositions-container-' + questionId);
+      const inputTestArea          = document.getElementById('input-test-' + questionId);
+    
+      if (!selectType || !reponseContainer || !propositionsContainer) return;
+    
+      switch (selectType.value) {
+        case 'ouverte':          // question ouverte-----------------------------
+          reponseContainer.style.display      = 'none';
+          propositionsContainer.style.display = 'none';
+          if (inputTestArea) inputTestArea.style.display = 'none';
+          break;
+    
+        case 'QCM':              // QCM -----------------------------------------
+          reponseContainer.style.display      = 'block';
+          propositionsContainer.style.display = 'block';
+          if (inputTestArea) inputTestArea.style.display = 'none';
+          break;
+    
+        default:                 // coding test ----------------------------------
+          reponseContainer.style.display      = 'block';
+          propositionsContainer.style.display = 'none';
+          if (inputTestArea) inputTestArea.style.display = 'block';
+          break;
+      }
+    }
+    
+
+    function validerQuestion(cardId) {
+      const card = document.getElementById(cardId);
+      const idNum = cardId.split('-')[1];
+      const selectType = card.querySelector('#type-' + idNum);
+      const inputEnonce = card.querySelector('#enonce-' + idNum);
+      const inputReponse = card.querySelector('#reponse-' + idNum);
+
+      if (!inputEnonce.value.trim()) {
+        alert("Veuillez renseigner l'énoncé de la question.");
+        return;
+      }
+
+      if (selectType.value === 'QCM') {
+        const listePropositions = document.getElementById('liste-propositions-' + idNum);
+        const propositionInputs = listePropositions.querySelectorAll('input[type="text"]');
+        if (propositionInputs.length === 0) {
+          alert("Veuillez ajouter au moins une proposition pour le QCM.");
+          return;
+        }
+        for (let input of propositionInputs) {
+          if (!input.value.trim()) {
+            alert("Veuillez renseigner toutes les propositions.");
+            return;
+          }
+        }
+      } else if (selectType.value !== 'ouverte' && !inputReponse.value.trim()) {
+        alert("Veuillez renseigner la réponse attendue pour ce type de question.");
+        return;
+      }
+
+      // Désactivation de tous les éléments sauf certains boutons
+      const elements = card.querySelectorAll('input, textarea, select, button');
+      elements.forEach(elem => {
+        if (elem.classList.contains('delete-button') || elem.classList.contains('ia-button')) {
+          // On laisse le bouton supprimer et le bouton IA activés
+          return;
+        }
+        elem.disabled = true;
+      });
+
+      const actionsDiv = card.querySelector('.question-actions');
+      const btnValider = actionsDiv.querySelector('button:not(.delete-button)');
+      btnValider.disabled = false;
+      btnValider.innerText = "Modifier la question";
+
+      alert("Question validée !");
+    }
+
+    function modifierQuestion(cardId) {
+      const card = document.getElementById(cardId);
+      const elements = card.querySelectorAll('input, textarea, select, button');
+      elements.forEach(elem => { 
+        elem.disabled = false; 
+      });
+      const actionsDiv = card.querySelector('.question-actions');
+      const btnValider = actionsDiv.querySelector('button:not(.delete-button)');
+      btnValider.innerText = "Valider";
+
+      alert("Mode édition réactivé pour la question !");
+    }
+
+    function supprimerQuestion(cardId) {
+      const card = document.getElementById(cardId);
+      if (card) {
+        card.remove();
+        questionCount--;
+        updateQuestionCounter();
+        alert("Question supprimée !");
+      }
+    }
+
+    function finishTest() {
+      // Récupération des données du timer
+      const timerValue = document.getElementById('timer-input').value;
+      const testData = {
+        timer: timerValue,
+        questions: []
+      };
+    
+      // Récupération des questions
+      const questionCards = document.querySelectorAll('.question-card');
+      questionCards.forEach(card => {
+        const idNum = card.id.split('-')[1];
+        const type = card.querySelector('#type-' + idNum).value;
+        const enonce = card.querySelector('#enonce-' + idNum).value;
+        const questionObj = {
+          type: type,
+          enonce: enonce
+        };
+    
+        if (type === 'QCM') {
+          const propositions = [];
+          const listeProps = document.getElementById('liste-propositions-' + idNum);
+          const inputs = listeProps.querySelectorAll('input[type="text"]');
+          inputs.forEach(input => {
+            propositions.push(input.value);
+          });
+          questionObj.propositions = propositions;
+        }
+    
+        if (type !== 'ouverte') {
+          const reponse = card.querySelector('#reponse-' + idNum).value;
+          questionObj.reponse = reponse;
+        }
+    
+        // Récupération des tags (facultatif)
+        const tagListContainer = document.getElementById('tag-list-' + idNum);
+        const tags = [];
+        tagListContainer.querySelectorAll('.tag-badge').forEach(tagElem => {
+          // Extraction du texte du tag (en retirant la croix)
+          tags.push(tagElem.firstChild.textContent.trim());
+        });
+        if(tags.length > 0){
+          questionObj.tags = tags;
+        }
+    
+        testData.questions.push(questionObj);
+      });
+    
+      // Conversion en JSON (affichage console si besoin)
+      const testJson = JSON.stringify(testData, null, 2);
+      console.log("Données du test :", testJson);
+    
+      // Redirection vers la page creer_test.html
+      window.location.href = "creer_test.html";
+    }
+
+
+    function getTags(questionId) {
+      return Array.from(
+        document.querySelectorAll(`#tag-list-${questionId} .tag-badge`)
+      ).map(t => t.firstChild.textContent.trim());
+    }
+    
+    
+  </script>
+  <!-- Modal IA -->
+<div id="ia-modal" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:none;justify-content:center;align-items:center;z-index:1000;">
+  <div style="position:relative;width:400px;background:#2b2b2b;color:#d0f0d0;padding:20px;border-radius:8px;box-shadow:0 2px 10px rgba(0,255,100,0.2);">
+
+    <span id="ia-modal-close" style="position:absolute;top:10px;right:10px;cursor:pointer;font-size:18px;">&times;</span>
+    <h2>Paramètres IA</h2>
+
+    <label for="ia-format">Format de la question :</label>
+    <select id="ia-format" style="width:100%;margin-bottom:10px;">
+      <option value="QCM">QCM</option>
+      <option value="ouverte">Question ouverte</option>
+      <option value="coding">Question de code</option>
+    </select>
+
+    <label for="ia-difficulte">Difficulté :</label>
+    <select id="ia-difficulte" style="width:100%;margin-bottom:10px;">
+      <option value="facile">Facile</option>
+      <option value="moyen" selected>Moyen</option>
+      <option value="difficile">Difficile</option>
+    </select>
+
+    <label for="ia-theme-input">Thème :</label>
+    <div id="ia-theme-tags" style="margin-bottom:20px;">
+      <input type="text" id="ia-theme-input" placeholder="Ajouter un tag" style="width:80%;"/>
+      <button id="ia-theme-add" type="button" style="width:18%;">Ajouter</button>
+      <div id="ia-theme-list" style="margin-top:5px;"></div>
+    </div>
+
+    <button id="ia-generate-btn" style="display:block;margin:0 auto;padding:10px 20px;background:#2f7f2f;color:#fff;border:none;border-radius:5px;cursor:pointer;">
+      Générer
+    </button>
+  </div>
+</div>
+
+<script>
+  // Ouvre le modal quand on clique sur un bouton "utiliser l'IA"
+  document.addEventListener('click', function(e) {
+    if (e.target.classList.contains('ia-button')) {
+      window.currentIaCard = e.target.closest('.question-card').id;
+      document.getElementById('ia-modal').style.display = 'flex';
+    }
+  });
+
+  // Ferme le modal
+  document.getElementById('ia-modal-close').onclick = function() {
+    document.getElementById('ia-modal').style.display = 'none';
+    clearIaModal();
+  };
+
+  // Ajoute un tag au modal
+  document.getElementById('ia-theme-add').onclick = function() {
+    const input = document.getElementById('ia-theme-input');
+    const val = input.value.trim();
+    if (!val) return;
+    const span = document.createElement('span');
+    span.style.marginRight = '5px';
+    span.textContent = val + ' ';
+    const rem = document.createElement('span');
+    rem.textContent = '✖';
+    rem.style.cursor = 'pointer';
+    rem.onclick = () => span.remove();
+    span.appendChild(rem);
+    document.getElementById('ia-theme-list').appendChild(span);
+    input.value = '';
+  };
+
+  // Appelle le backend et remplit la carte comme avant
+  document.getElementById('ia-generate-btn').onclick = async function() {
+    const cardId = window.currentIaCard.split('-')[1];
+    const format = document.getElementById('ia-format').value;
+    const difficulte = document.getElementById('ia-difficulte').value;
+    const tags = Array.from(document.getElementById('ia-theme-list').children)
+                      .map(el => el.firstChild.textContent.trim());
+    const theme = tags.length ? tags.join(', ') : 'général';
+    try {
+      const res = await fetch('http://127.0.0.1:5000/generate-question', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ format, difficulte, theme })
+      });
+      const data = await res.json();
+      // Remplissage de l'énoncé et de la réponse
+      const enonce = document.getElementById('enonce-'+cardId);
+      const reponse = document.getElementById('reponse-'+cardId);
+      enonce.value = data.question || data.enonce || data.prompt || data.statement || '';
+      if (reponse && data.answer) reponse.value = data.answer;
+
+      // Si QCM : on vide et on regénère 3 propositions
+      if (format === 'QCM') {
+        const liste = document.getElementById('liste-propositions-'+cardId);
+        liste.innerHTML = '';
+        document.getElementById('propositions-container-'+cardId).dataset.count = '0';
+        const props = Array.isArray(data.propositions) && data.propositions.length
+                      ? data.propositions.slice(0,3)
+                      : ['','',''];
+        props.forEach(txt => ajouterProposition(cardId, txt));
+      }
+    } catch(err) {
+      alert('Erreur IA : ' + err.message);
+    }
+    document.getElementById('ia-modal').style.display = 'none';
+    clearIaModal();
+  };
+
+  function clearIaModal() {
+    document.getElementById('ia-format').value = 'QCM';
+    document.getElementById('ia-difficulte').value = 'moyen';
+    document.getElementById('ia-theme-input').value = '';
+    document.getElementById('ia-theme-list').innerHTML = '';
+  }
+</script>
+
+</body>
+</html>

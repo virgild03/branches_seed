@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Passer le test</title>
+  <!-- Réutilisez votre CSS existant pour garder une cohérence visuelle -->
+  <link rel="stylesheet" href="style_excentrique.css" />
+  <!-- Firebase v9 compat pour Firestore -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+  <style>
+    /* Ajustements mineurs pour la page de passage */
+    body { padding: 1rem; background: #1f1f1f; color: #eee; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+    #timer { font-size: 1.2em; }
+    .question-card { background: #2b2b2b; padding:1rem; margin-bottom:1rem; border-radius:6px; }
+    .status { font-size:0.9em; margin-top:0.5rem; }
+    .btn-submit { padding: 0.8rem 1.5rem; background: #2f7f2f; color: #fff; border:none; border-radius:6px; cursor:pointer; }
+  </style>
+  <script>
+    // **1. Initialisation Firebase – à remplacer par VOS credentials**
+    const firebaseConfig = {
+      apiKey: "AIzaSyC0mAv8YjcIC4IQgJfBaXr3RwjAvkZx5XI",
+      authDomain: "seed-ebd4b.firebaseapp.com",
+      projectId: "seed-ebd4b",
+      storageBucket: "seed-ebd4b.appspot.com",
+      messagingSenderId: "467048315729",
+      appId: "1:467048315729:web:4dc726ed83ab5a38a9f170"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+  </script>
+</head>
+<body>
+
+  <header>
+    <h1>Votre Challenge Technique</h1>
+    <div id="timer">00:00</div>
+  </header>
+
+  <main id="questions-container">
+    <p>Chargement du test…</p>
+  </main>
+
+  <div style="text-align:center; margin-top:2rem;">
+    <button id="submit-test" class="btn-submit">Soumettre le test</button>
+  </div>
+
+  <script>
+    // --- 2. Récupération des paramètres d’URL ---
+    const params      = new URLSearchParams(window.location.search);
+    const challengeId = params.get('challengeId');
+    const jobId       = params.get('jobId');
+    const candidateId = params.get('candidateId');
+    if (!challengeId || !jobId || !candidateId) {
+      alert("Il faut passer challengeId, jobId et candidateId en paramètre.");
+      throw new Error("Params manquants");
+    }
+
+    let candidateAnswerRef;
+    let questionDocs = []; // liste des { id, data }
+
+    // --- 3. Chargement du challenge + questions ---
+    async function loadChallenge() {
+      const chalSnap = await db.collection('Challenge').doc(challengeId).get();
+      if (!chalSnap.exists) throw new Error("Challenge introuvable");
+      const chal = chalSnap.data();
+
+      // Chaque élément de chal.exercises est un DocumentReference
+      const promises = chal.exercises.map(ref => ref.get());
+
+      const snaps = await Promise.all(promises);
+      questionDocs = snaps.map(s => ({ id: s.id, data: s.data() }));
+      renderQuestions();
+      startTimer(chal.duration);
+      await initCandidateAnswer();
+      listenForCorrections();
+    }
+
+    // --- 4. Génération du HTML des questions ---
+    function renderQuestions() {
+      const container = document.getElementById('questions-container');
+      container.innerHTML = ''; 
+      questionDocs.forEach((q, idx) => {
+        const card = document.createElement('div');
+        card.className = 'question-card';
+        card.id = `q-${q.id}`;
+
+        // En-tête
+        card.innerHTML = `
+          <h3>Question ${idx+1} / ${questionDocs.length}</h3>
+          <p><strong>Type :</strong> ${q.data.type}</p>
+          <p>${q.data.statement}</p>
+        `;
+
+
+        // Zone de réponse
+        const respDiv = document.createElement('div');
+        respDiv.className = 'response';
+        if (q.data.type === 'QCM') {
+          q.data.options.forEach(opt => {
+            const label = document.createElement('label');
+            label.style.display = 'block';
+            label.innerHTML = `
+              <input type="radio" name="opt-${q.id}" value="${opt}" />
+              ${opt}
+            `;
+            respDiv.appendChild(label);
+          });
+        } else if (q.data.type === 'CodingQuestion') {
+          // Afficher l’input testé si besoin
+          if (q.data.input) {
+            respDiv.innerHTML += `<p><em>Input attendu :</em> <code>${q.data.input}</code></p>`;
+          }
+          const ta = document.createElement('textarea');
+          ta.id = `code-${q.id}`;
+          ta.rows = 6;
+          ta.style.width = '100%';
+          respDiv.appendChild(ta);
+        } else {
+          const ta = document.createElement('textarea');
+          ta.id = `open-${q.id}`;
+          ta.rows = 4;
+          ta.style.width = '100%';
+          respDiv.appendChild(ta);
+        }
+
+        // Statut / score
+        const status = document.createElement('div');
+        status.className = 'status';
+        status.id = `status-${q.id}`;
+        status.textContent = 'En attente de correction…';
+        card.appendChild(respDiv);
+        card.appendChild(status);
+        container.appendChild(card);
+      });
+    }
+
+    // --- 5. Timer ---
+    let timerInterval;
+    function startTimer(totalMinutes=0) {
+      let secondsLeft = totalMinutes * 60;
+      const display = document.getElementById('timer');
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = setInterval(() => {
+        const m = String(Math.floor(secondsLeft/60)).padStart(2,'0');
+        const s = String(secondsLeft%60).padStart(2,'0');
+        display.textContent = `${m}:${s}`;
+        if (secondsLeft-- <= 0) {
+          clearInterval(timerInterval);
+          alert("Temps écoulé, le test va être soumis automatiquement.");
+          submitTest();
+        }
+      }, 1000);
+    }
+
+    // --- 6. Création du document CandidateAnswer ---
+    async function initCandidateAnswer() {
+      candidateAnswerRef = await db.collection('CandidateAnswer').add({
+        jobId: db.doc(`Job/${jobId}`),
+        candidateId: db.doc(`Candidate/${candidateId}`),
+        challengeId: db.doc(`Challenge/${challengeId}`),
+        answers: [],
+        score: 0
+      });
+    }
+
+    // --- 7. Soumission des réponses ---
+    document.getElementById('submit-test').onclick = submitTest;
+    async function submitTest() {
+      document.getElementById('submit-test').disabled = true;
+      for (let {id, data} of questionDocs) {
+        let payload = {
+          questionId: db.doc(`exercise/${id}`),
+          type: data.type,
+          corrected: false
+        };
+        if (data.type === 'QCM') {
+          const sel = document.querySelector(`input[name="opt-${id}"]:checked`);
+          payload.selectedOption = sel ? sel.value : null;
+        } else if (data.type === 'CodingQuestion') {
+          payload.value = document.getElementById(`code-${id}`).value;
+        } else {
+          payload.value = document.getElementById(`open-${id}`).value;
+        }
+        const ansRef = await db.collection('Answers').add(payload);
+        await candidateAnswerRef.update({
+          answers: firebase.firestore.FieldValue.arrayUnion(ansRef)
+        });
+      }
+      alert("Test soumis ! Les corrections automatiques vont arriver sous peu.");
+    }
+
+    // --- 8. Écoute des corrections en temps réel ---
+    function listenForCorrections() {
+      // On écoute le doc CandidateAnswer pour le score global
+      db.collection('CandidateAnswer').doc(candidateAnswerRef.id)
+        .onSnapshot(snap => {
+          const data = snap.data();
+          // si on veut afficher le score global, on peut le faire ici…
+          console.log("Score global :", data.score);
+        });
+
+      // On écoute chaque réponse pour mettre à jour son statut/score
+      db.collection('CandidateAnswer').doc(candidateAnswerRef.id).get().then(snap => {
+        const ansRefs = snap.data().answers || [];
+        ansRefs.forEach(ref => {
+          ref.onSnapshot(aSnap => {
+            const a = aSnap.data();
+            const stat = document.getElementById(`status-${aSnap.id}`);
+            if (!stat) return;
+            if (!a.corrected) {
+              stat.textContent = 'En attente de correction…';
+            } else if (a.type === 'OpenQuestion') {
+              stat.textContent = `À corriger manuellement`;
+            } else {
+              stat.textContent = `Corrigé automatiquement – score : ${a.score}`;
+            }
+          });
+        });
+      });
+    }
+
+    // --- Lancement ---
+    loadChallenge().catch(err => {
+      console.error(err);
+      alert("Erreur au chargement : " + err.message);
+    });
+  </script>
+</body>
+</html>

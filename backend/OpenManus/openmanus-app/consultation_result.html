@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Consultation d’un résultat</title>
+  <link rel="stylesheet" href="style_excentrique.css">
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+  <style>
+    body{background:#1f1f1f;color:#eee;padding:1rem;font-family:sans-serif}
+    .card{background:#2b2b2b;border-radius:6px;padding:1rem;margin-bottom:1rem}
+    .correct{color:#4caf50}.incorrect{color:#f44336}
+    .btn-submit {padding: .6rem 1.2rem; background: #2f7f2f; color: #fff; border:none; border-radius:6px; cursor:pointer;}
+    .open-score { margin-top: .5rem; display: flex; gap: .5rem; align-items:center; }
+    .open-score input { width: 4rem; }
+  </style>
+  <script>
+    // ** Init Firebase **
+    const firebaseConfig = {
+      apiKey: "AIzaSyC0mAv8YjcIC4IQgJfBaXr3RwjAvkZx5XI",
+      authDomain: "seed-ebd4b.firebaseapp.com",
+      projectId: "seed-ebd4b",
+      storageBucket: "seed-ebd4b.appspot.com",
+      messagingSenderId: "467048315729",
+      appId: "1:467048315729:web:4dc726ed83ab5a38a9f170"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+    const { getDoc, updateDoc } = firebase.firestore;
+  </script>
+</head>
+<body>
+
+  <h1>Résultat du test</h1>
+
+  <!-- 1) BOUTON AUTO-CORRECT -->
+  <div style="text-align:center; margin-bottom:1rem;">
+    <button id="btn-auto-correct" class="btn-submit">Corriger automatiquement</button>
+  </div>
+
+  <main id="content"><p>Chargement…</p></main>
+
+  <script>
+  (async()=>{
+    const p    = new URLSearchParams(location.search);
+    const caId = p.get('candidateAnswerId');
+    if(!caId){
+      document.getElementById('content').textContent="Paramètre manquant";
+      return;
+    }
+    // Récupère le document CandidateAnswer
+    const caRef  = db.doc(`CandidateAnswer/${caId}`);
+    const caSnap = await caRef.get();
+    if(!caSnap.exists){ throw "Document introuvable"; }
+    let caData   = caSnap.data();
+    const answersRef = caData.answers || [];
+
+    // Render initial
+    const content = document.getElementById('content');
+    content.innerHTML = `
+      <div class="card">
+        <p><strong>Score total :</strong> <span id="total-score">${caData.score ?? 0}</span></p>
+        <p><strong>Réponses :</strong></p>
+      </div>`;
+
+    // Pour chaque réponse
+    for(const ref of answersRef){
+      const aSnap = await ref.get(); 
+      if(!aSnap.exists) continue;
+      const a = aSnap.data();
+      const div = document.createElement('div');
+      div.className = 'card';
+      // zone pour open questions
+      let openFormHTML = '';
+      if(a.type === 'OpenQuestion' && !a.corrected){
+        openFormHTML = `
+          <div class="open-score">
+            <label>Note (0-10)&nbsp;:</label>
+            <input type="number" min="0" max="10" value="0" id="score-${ref.id}" />
+            <button data-ref="${ref.id}" class="btn-open-score btn-submit">Valider</button>
+          </div>`;
+      }
+      // mise en page
+      div.innerHTML = `
+        <p><strong>Question :</strong> ${a.questionId.id}</p>
+        <p><strong>Type :</strong> ${a.type}</p>
+        <p><strong>Votre réponse :</strong> ${a.value || a.selectedOption || '(vide)'}</p>
+        ${ a.corrected
+            ? (a.isCorrect
+                ? '<p class="correct">✔ Correct</p>'
+                : '<p class="incorrect">✖ Incorrect</p>')
+            : '<p>⏳ En attente de correction</p>' }
+        ${openFormHTML}
+      `;
+      content.appendChild(div);
+    }
+
+    // --- 2) CORRECTION MANUELLE OPEN QUESTIONS ---
+    content.addEventListener('click', async e => {
+      if(e.target.matches('.btn-open-score')){
+        const ansId = e.target.dataset.ref;
+        const scoreInput = document.getElementById(`score-${ansId}`);
+        const scoreValue = Number(scoreInput.value);
+        if(isNaN(scoreValue) || scoreValue<0 || scoreValue>10){
+          return alert('Note invalide (0–10).');
+        }
+        // update Answer
+        const ansRef = db.doc(`Answers/${ansId}`);
+        await updateDoc(ansRef, {
+          corrected: true,
+          isCorrect: false,
+          score: scoreValue
+        });
+        // Met à jour l'affichage
+        e.target.closest('.card').querySelector('p:nth-child(4)').outerHTML =
+          `<p class="incorrect">✖ Note attribuée : ${scoreValue}</p>`;
+        // Met à jour score total
+        caData.score = (caData.score || 0) + scoreValue;
+        await updateDoc(caRef, { score: caData.score });
+        document.getElementById('total-score').textContent = caData.score;
+      }
+    });
+
+    // --- 3) CORRIGER AUTOMATIQUEMENT QCM & CODING ---
+    document.getElementById('btn-auto-correct').addEventListener('click', async ()=>{
+      let total = caData.score || 0;
+      for(const ref of answersRef){
+        const aSnap = await ref.get(); 
+        if(!aSnap.exists) continue;
+        const a = aSnap.data();
+        if(a.corrected) continue;  // déjà fait
+        // Récupère la question
+        const qSnap = await a.questionId.get();
+        const q = qSnap.data();
+        let isCorr = false, pts = 0;
+        if(a.type === 'QCM'){
+          isCorr = a.selectedOption === q.acceptedAnswer;
+          pts    = isCorr ? q.score : 0;
+        } else if(a.type === 'CodingQuestion'){
+          // on suppose sandbox dispo globalement
+          try {
+            const out = await executeCodeInSandbox(a.value, q.language, q.input);
+            isCorr = out.trim() === q.expectedOutput.trim();
+          } catch(_){ isCorr = false; }
+          pts = isCorr ? q.score : 0;
+        } else continue; // pas toucher OpenQuestion ici
+        // update Answer
+        await updateDoc(ref, {
+          corrected: true,
+          isCorrect: isCorr,
+          score: pts,
+          candidateOutput: (isCorr ? q.expectedOutput : '')
+        });
+        total += pts;
+      }
+      // mise à jour score total du challenge answer
+      await updateDoc(caRef, { score: total });
+      document.getElementById('total-score').textContent = total;
+      alert("Correction automatique terminée !");
+      // rechargement rapide pour refléter le nouveau statut
+      location.reload();
+    });
+
+  })().catch(err=>{
+    console.error(err);
+    document.getElementById('content').innerHTML =
+      `<p style="color:tomato;">Erreur : ${err}</p>`;
+  });
+
+  </script>
+</body>
+</html>

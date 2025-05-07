@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Suivi des passations par Job</title>
+  <link rel="stylesheet" href="style_excentrique.css" />
+
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-functions-compat.js"></script>
+
+  <style>
+    body { background:#1f1f2e; color:#eee; padding:1rem; font-family:sans-serif; }
+    h1   { font-size:1.8rem; margin-bottom:1rem; color:#3fd17d; }
+    .card{ background:#2b2b2b; padding:1rem; border-radius:6px; margin-bottom:1rem; }
+    label,input,button{ display:block; width:100%; }
+    input{ padding:.6rem; border:none; border-radius:4px; margin:.5rem 0; }
+    button{ padding:.6rem 1rem; background:#3fd17d; color:#111; border:none; border-radius:6px; cursor:pointer; margin-top:.5rem; }
+    ul.pass-list{ list-style:none; padding:0; margin:0; }
+    ul.pass-list li{ background:#2b2b2b; border-radius:6px; margin-bottom:.5rem; padding:.8rem 1rem; display:flex; justify-content:space-between; align-items:center; }
+    .info{ font-size:.85rem; opacity:.75; }
+    .score{ font-weight:bold; color:#3fd17d; }
+    .btn-note{ background:#f0ad4e; margin-left:.5rem; }
+  </style>
+
+  <script>
+    // --- 1) Initialisation Firebase ---
+    const firebaseConfig = {
+      apiKey: "AIzaSyC0mAv8YjcIC4IQgJfBaXr3RwjAvkZx5XI",
+      authDomain: "seed-ebd4b.firebaseapp.com",
+      projectId: "seed-ebd4b",
+      storageBucket: "seed-ebd4b.appspot.com",
+      messagingSenderId: "467048315729",
+      appId: "1:467048315729:web:4dc726ed83ab5a38a9f170"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+    const functions = firebase.functions();
+    const autoCorrect = functions.httpsCallable('autoCorrectAnswer');
+    const manualCorrect = functions.httpsCallable('manualCorrectOpen');
+  </script>
+</head>
+
+<body>
+  <h1>Suivi des passations par Job</h1>
+
+  <!-- panneau d’entrée du jobId -->
+  <div id="job-panel" class="card">
+    <label for="job-id">Entrez le Job ID :</label>
+    <input id="job-id" placeholder="ex : job1" />
+    <button id="btn-set-job">Valider</button>
+  </div>
+
+  <!-- liste des passations -->
+  <main id="list-container"></main>
+
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    let currentJobId = urlParams.get('jobId');
+
+    const panel   = document.getElementById('job-panel');
+    const inputEl = document.getElementById('job-id');
+    const btnEl   = document.getElementById('btn-set-job');
+    const listEl  = document.getElementById('list-container');
+
+    if (currentJobId) {
+      panel.style.display = 'none';
+      loadJobPassations(currentJobId);
+    } else {
+      btnEl.addEventListener('click', () => {
+        const v = inputEl.value.trim();
+        if (!v) return alert('Saisis un Job ID');
+        window.location.search = '?jobId=' + encodeURIComponent(v);
+      });
+    }
+
+    // ---------- fonction principale ----------
+    async function loadJobPassations(jobId) {
+      listEl.innerHTML = '<p>Chargement des passations…</p>';
+      try {
+        const jobRef = db.doc(`Job/${jobId}`);
+        const qSnap  = await db.collection('CandidateAnswer')
+                               .where('jobId','==', jobRef)
+                               .get();
+
+        // on ne garde que celles rendues (answers.length>0)
+        const validDocs = qSnap.docs.filter(d => {
+          const a = d.data().answers || [];
+          return Array.isArray(a) && a.length > 0;
+        });
+
+        if (validDocs.length === 0) {
+          listEl.innerHTML =
+            `<p>Aucune passation <em>rendue</em> pour le job <strong>${jobId}</strong>.</p>`;
+          return;
+        }
+
+        const ul = document.createElement('ul');
+        ul.className = 'pass-list';
+
+        for (const docSnap of validDocs) {
+          const data = docSnap.data();
+          const answersRef = data.answers || [];
+
+          // 1) Extraire candId et chalId (string ou Reference)
+          let candId = '';
+          if (typeof data.candidateId === 'string')
+            candId = data.candidateId.split('/').pop();
+          else if (data.candidateId?.id)
+            candId = data.candidateId.id;
+
+          let chalId = '';
+          if (typeof data.challengeId === 'string')
+            chalId = data.challengeId.split('/').pop();
+          else if (data.challengeId?.id)
+            chalId = data.challengeId.id;
+
+          // 2) Auto-correction pour QCM & CodingQuestion
+          await Promise.all(answersRef.map(ref =>
+            autoCorrect({ answerPath: ref.path })
+              .catch(()=>{/* skip errors */})
+          ));
+
+          // 3) Calcul du score total et ratio corrigés
+          const totalScore = data.score ?? 0;
+          let corrected = 0;
+          await Promise.all(answersRef.map(async ref => {
+            try {
+              const aSnap = await ref.get();
+              if (aSnap.exists && aSnap.data().corrected) corrected++;
+            } catch(e){}
+          }));
+          const ratio = answersRef.length
+                        ? `${corrected}/${answersRef.length}`
+                        : '0/0';
+
+          // 4) Récupérer nom du candidat
+          let candName = '';
+          try {
+            const cSnap = await db.doc(`Candidate/${candId}`).get();
+            candName = cSnap.exists ? (cSnap.data().name||candId) : candId;
+          } catch(e){ candName = candId; }
+
+          // 5) Construire la ligne
+          const li = document.createElement('li');
+          li.innerHTML = `
+            <span>
+              <span class="score">Score : ${totalScore}</span><br>
+              <span class="info">
+                Candidat : ${candName} — 
+                Test : ${chalId} — 
+                Corrigé : ${ratio}
+              </span>
+            </span>
+            <div>
+              <button class="btn-open">Ouvrir</button>
+              ${ratio.includes('0/') ? '' : ''} <!-- pas de note si pas d'ouvertes-->
+            </div>
+          `;
+
+          // 6) Bouton « Ouvrir » → consultation_result.html
+          li.querySelector('.btn-open').addEventListener('click', () => {
+            window.location.href =
+              `consultation_result.html?candidateAnswerId=${docSnap.id}` +
+              `&challengeId=${chalId}` +
+              `&jobId=${jobId}` +
+              `&candidateId=${encodeURIComponent(candId)}`;
+          });
+
+          // 7) Bouton « Noter » pour les open questions
+          //    on détecte s’il existe au moins une réponse open non corrigée
+          const hasOpen = await Promise.any(answersRef.map(async ref => {
+            const aSnap = await ref.get();
+            return aSnap.exists && aSnap.data().type === 'OpenQuestion';
+          })).catch(()=>false);
+
+          if (hasOpen) {
+            const btnNote = document.createElement('button');
+            btnNote.textContent = 'Noter ouvertes';
+            btnNote.className = 'btn-note';
+            btnNote.onclick = async () => {
+              // on fait un prompt pour chaque openQ
+              for (const ref of answersRef) {
+                const aSnap = await ref.get();
+                if (aSnap.exists && aSnap.data().type==='OpenQuestion') {
+                  const ansData = aSnap.data();
+                  const pts = Number(prompt(
+                    `Énoncé : ${ansData.questionId.id}\n` +
+                    `Réponse : ${ansData.value}\n` +
+                    `Note attribuée :`, '0'
+                  ));
+                  if (!isNaN(pts)) {
+                    await manualCorrect({ answerPath: ref.path, score: pts });
+                  }
+                }
+              }
+              alert('Questions ouvertes notées.');
+              // rafraîchir la page
+              loadJobPassations(jobId);
+            };
+            li.querySelector('div').appendChild(btnNote);
+          }
+
+          ul.appendChild(li);
+        }
+
+        listEl.innerHTML = '';
+        listEl.appendChild(ul);
+
+      } catch (err) {
+        console.error("Erreur Firestore :", err);
+        listEl.innerHTML = `<p style="color:tomato;">Erreur : ${err.message}</p>`;
+      }
+    }
+  </script>
+</body>
+</html>

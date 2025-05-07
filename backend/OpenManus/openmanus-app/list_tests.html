@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Liste des Challenges</title>
+  <link rel="stylesheet" href="style_excentrique.css" />
+  <!-- Firebase v9 compat -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+  <style>
+    body { background: #1f1f1f; color: #eee; padding: 1rem; font-family: sans-serif; }
+    header { margin-bottom: 1rem; }
+    h1 { font-size: 1.8rem; }
+    .card { background: #2b2b2b; padding: 1rem; border-radius: 6px; margin-bottom: 1rem; }
+    label { display: block; margin-bottom: .5rem; }
+    input { width: 100%; padding: .5rem; margin-bottom: .5rem; border-radius: 4px; border: none; }
+    button { padding: .6rem 1.2rem; background: #2f7f2f; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+    ul.challenge-list { list-style: none; padding: 0; margin: 0; }
+    ul.challenge-list li { display: flex; justify-content: space-between; align-items: center; background: #2b2b2b; margin-bottom: .5rem; padding: .8rem 1rem; border-radius: 6px; }
+    .challenge-title { font-weight: bold; }
+    .challenge-info { font-size: .9rem; opacity: .7; }
+    .btn-open { font-size: .9rem; }
+  </style>
+  <script>
+    // 1) Ta config Firebase (identique à passer_test.html)
+    const firebaseConfig = {
+      apiKey: "AIzaSyC0mAv8YjcIC4IQgJfBaXr3RwjAvkZx5XI",
+      authDomain: "seed-ebd4b.firebaseapp.com",
+      projectId: "seed-ebd4b",
+      storageBucket: "seed-ebd4b.appspot.com",
+      messagingSenderId: "467048315729",
+      appId: "1:467048315729:web:4dc726ed83ab5a38a9f170"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+  </script>
+</head>
+<body>
+
+  <header>
+    <h1>Choisissez votre Challenge</h1>
+  </header>
+
+  <!-- 2) Si on n’a pas de candidateId, on demande à l’utilisateur -->
+  <div id="candidate-panel" class="card">
+    <label for="candidate-id">Entrez votre Candidate ID :</label>
+    <input type="text" id="candidate-id" placeholder="ex : cand1">
+    <button id="btn-set-candidate">OK</button>
+  </div>
+
+  <!-- 3) Liste des challenges -->
+  <main id="list-container">
+    <p id="loading">Chargement des challenges…</p>
+  </main>
+
+  <script>
+    // lecture éventuelle de ?candidateId=…
+    let candidateId = new URLSearchParams(window.location.search).get('candidateId');
+    const panel = document.getElementById('candidate-panel');
+
+    if (candidateId) {
+      panel.style.display = 'none';
+      loadChallenges();
+    } else {
+      panel.style.display = 'block';
+      document.getElementById('btn-set-candidate')
+        .addEventListener('click', () => {
+          const v = document.getElementById('candidate-id').value.trim();
+          if (!v) return alert('Renseignez votre ID candidat');
+          // relance la page avec candidateId en param
+          window.location.search = '?candidateId=' + encodeURIComponent(v);
+        });
+    }
+
+    async function loadChallenges() {
+      const container = document.getElementById('list-container');
+      container.innerHTML = '';
+      const snapshot = await db.collection('Challenge').get();
+      if (snapshot.empty) {
+        container.innerHTML = '<p>Aucun challenge trouvé.</p>';
+        return;
+      }
+      const ul = document.createElement('ul');
+      ul.className = 'challenge-list';
+      snapshot.forEach(docSnap => {
+        const d = docSnap.data();
+        const id = docSnap.id;
+        const title = d.title || id;
+        // jobId est un DocumentReference
+        const jobRef = d.jobId;
+        const jobId = (jobRef && jobRef.id) || '—';
+
+        const li = document.createElement('li');
+        li.innerHTML = `
+          <span>
+            <span class="challenge-title">${title}</span><br>
+            <span class="challenge-info">ID: ${id} — Job: ${jobId}</span>
+          </span>
+          <button class="btn-open">Passer</button>
+        `;
+        li.querySelector('.btn-open')
+          .addEventListener('click', () => {
+            window.location.href =
+              `passer_test.html?challengeId=${id}` +
+              `&jobId=${jobId}` +
+              `&candidateId=${encodeURIComponent(candidateId)}`;
+          });
+        ul.appendChild(li);
+      });
+      container.appendChild(ul);
+    }
+  </script>
+</body>
+</html>

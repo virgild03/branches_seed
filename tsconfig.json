@@ -1,0 +1,21 @@
+{
+    "compilerOptions": {
+      "module": "commonjs",
+      "resolveJsonModule": true,
+      "esModuleInterop": true,
+      "strict": true,
+      "target": "ES2020",
+      "moduleResolution": "node",
+      "outDir": "./dist",
+      "skipLibCheck": true
+    },
+    "include": [
+      "src/**/*.ts",
+      "backend/**/*.ts"
+, "backend/commun/types/firebase.tsx"    ],
+    "exclude": [
+      "node_modules",
+      "dist"
+    ]
+  }
+  
